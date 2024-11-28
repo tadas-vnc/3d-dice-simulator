@@ -14,6 +14,21 @@
             height: 100vh;
             display: block;
         }
+        #controlPanel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(24,22,25,0.9);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+        #controlPanel label {
+            display: block;
+            margin-top: 10px;
+			color: white;
+        }
         #rollButton {
             position: fixed;
             bottom: 20px;
@@ -35,14 +50,27 @@
     </style>
 </head>
 <body>
+    <div id="controlPanel">
+        <label>Dice Color: <input type="color" id="diceColorPicker"></label>
+        <label>Dots Color: <input type="color" id="dotsColorPicker"></label>
+        <label>Floor Color: <input type="color" id="floorColorPicker"></label>
+    </div>
     <button id="rollButton">Roll Dice</button>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script>
-        let camera, scene, renderer, world, dice, physicsBody;
+        let camera, scene, renderer, world, dice, physicsBody, floorMesh;
         const diceGeometry = new THREE.BoxGeometry(1, 1, 1);
+        let isRolling = false;
 
-        function createDotTexture(dotCount) {
+        // Default colors
+        const defaultColors = {
+            dice: '#FFFFFF',
+            dots: '#000000',
+            floor: '#CCCCCC'
+        };
+
+        function createDotTexture(dotCount, dotsColor) {
             const canvas = document.createElement('canvas');
             canvas.width = 256;
             canvas.height = 256;
@@ -50,7 +78,7 @@
             context.fillStyle = '#ffffff';
             context.fillRect(0, 0, 256, 256);
             
-            context.fillStyle = '#000000';
+            context.fillStyle = dotsColor;
             const dotRadius = 20;
             const gridSize = 3;
             const spacing = canvas.width / (gridSize + 1);
@@ -63,15 +91,14 @@
                 context.fill();
             }
 
-            // Dot configurations for each face
             const dotConfigurations = [
-                [],                         // 0 (not used)
-                [[1,1]],                    // 1
-                [[0,0], [2,2]],             // 2
-                [[0,0], [1,1], [2,2]],      // 3
-                [[0,0], [0,2], [2,0], [2,2]], // 4
-                [[0,0], [0,2], [1,1], [2,0], [2,2]], // 5
-                [[0,0], [0,2], [1,0], [1,2], [2,0], [2,2]] // 6
+                [],
+                [[1,1]],
+                [[0,0], [2,2]],
+                [[0,0], [1,1], [2,2]],
+                [[0,0], [0,2], [2,0], [2,2]],
+                [[0,0], [0,2], [1,1], [2,0], [2,2]],
+                [[0,0], [0,2], [1,0], [1,2], [2,0], [2,2]]
             ];
 
             const dots = dotConfigurations[dotCount];
@@ -80,6 +107,47 @@
             });
 
             return new THREE.CanvasTexture(canvas);
+        }
+
+        function saveSettings() {
+            const settings = {
+                diceColor: document.getElementById('diceColorPicker').value,
+                dotsColor: document.getElementById('dotsColorPicker').value,
+                floorColor: document.getElementById('floorColorPicker').value
+            };
+            localStorage.setItem('diceSimulatorSettings', JSON.stringify(settings));
+        }
+
+        function loadSettings() {
+            const savedSettings = JSON.parse(localStorage.getItem('diceSimulatorSettings') || '{}');
+            
+            const diceColorPicker = document.getElementById('diceColorPicker');
+            const dotsColorPicker = document.getElementById('dotsColorPicker');
+            const floorColorPicker = document.getElementById('floorColorPicker');
+
+            diceColorPicker.value = savedSettings.diceColor || defaultColors.dice;
+            dotsColorPicker.value = savedSettings.dotsColor || defaultColors.dots;
+            floorColorPicker.value = savedSettings.floorColor || defaultColors.floor;
+
+            return savedSettings;
+        }
+
+        function updateColors() {
+            const diceColor = document.getElementById('diceColorPicker').value;
+            const dotsColor = document.getElementById('dotsColorPicker').value;
+            const floorColor = document.getElementById('floorColorPicker').value;
+
+            // Update floor color
+            if (floorMesh) {
+                floorMesh.material.color.set(floorColor);
+            }
+
+            // Recreate dice with new colors
+            scene.remove(dice);
+            world.removeBody(physicsBody);
+            createDice(diceColor, dotsColor);
+
+            saveSettings();
         }
 
         function init() {
@@ -101,15 +169,17 @@
             scene.add(directionalLight);
             
             const floorGeometry = new THREE.PlaneGeometry(10, 10);
+            const savedSettings = loadSettings();
+            const floorColor = savedSettings.floorColor || defaultColors.floor;
             const floorMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0xcccccc,
+                color: floorColor,
                 roughness: 0.8,
                 metalness: 0.2
             });
-            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-            floor.rotation.x = -Math.PI / 2;
-            floor.receiveShadow = true;
-            scene.add(floor);
+            floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            scene.add(floorMesh);
             
             world = new CANNON.World();
             world.gravity.set(0, -9.82, 0);
@@ -119,18 +189,25 @@
             floorBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
             world.addBody(floorBody);
 
-            createDice();
+            const diceColor = savedSettings.diceColor || defaultColors.dice;
+            const dotsColor = savedSettings.dotsColor || defaultColors.dots;
+            createDice(diceColor, dotsColor);
             
             document.getElementById('rollButton').addEventListener('click', rollDice);
+            
+            // Add event listeners for color pickers
+            document.getElementById('diceColorPicker').addEventListener('change', updateColors);
+            document.getElementById('dotsColorPicker').addEventListener('change', updateColors);
+            document.getElementById('floorColorPicker').addEventListener('change', updateColors);
         }
 
-        function createDice() {
+        function createDice(diceColor, dotsColor) {
             const materials = [];
             
-            // Create materials with dot textures for each face
             for(let i = 1; i <= 6; i++) {
-                const texture = createDotTexture(i);
+                const texture = createDotTexture(i, dotsColor);
                 materials.push(new THREE.MeshStandardMaterial({ 
+                    color: diceColor,
                     map: texture,
                     roughness: 0.5,
                     metalness: 0.3
@@ -147,31 +224,70 @@
             world.addBody(physicsBody);
         }
 
+        function isOnGround() {
+            return Math.abs(physicsBody.position.y - 0.5) < 0.1 && 
+                   Math.abs(physicsBody.velocity.y) < 0.1;
+        }
+
         function rollDice() {
-            const randomX = (Math.random() - 0.5) * 4;
-            const randomZ = (Math.random() - 0.5) * 4;
-            physicsBody.position.set(randomX, 8, randomZ);
-            physicsBody.velocity.set(0, 0, 0);
-            physicsBody.angularVelocity.set(
-                Math.random() * 10 - 5,
-                Math.random() * 10 - 5,
-                Math.random() * 10 - 5
-            );
-            
-            physicsBody.quaternion.setFromEuler(
-                Math.random() * Math.PI,
-                Math.random() * Math.PI,
-                Math.random() * Math.PI
-            );
+            if (isOnGround() || !isRolling) {
+                isRolling = true;
+                
+                // Current position
+                const currentX = physicsBody.position.x;
+                const currentZ = physicsBody.position.z;
+                
+                // Vector towards the center (0,0,0)
+                const directionToCenter = new CANNON.Vec3(
+                    -currentX, 
+                    0, 
+                    -currentZ
+                );
+                directionToCenter.normalize();
+                
+                // Random vertical velocity
+                const verticalVelocity = 5 + Math.random() * 5;
+                
+                // Scaling horizontal velocities
+                const horizontalScale = 3;
+                
+                physicsBody.position.set(currentX, 0.6, currentZ);
+                physicsBody.velocity.set(
+                    directionToCenter.x * horizontalScale,
+                    verticalVelocity,
+                    directionToCenter.z * horizontalScale
+                );
+                
+                // Random spin speeds
+                physicsBody.angularVelocity.set(
+                    Math.random() * 10 - 5,
+                    Math.random() * 10 - 5,
+                    Math.random() * 10 - 5
+                );
+                
+                // Randomize initial orientation
+                physicsBody.quaternion.setFromEuler(
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI
+                );
+            }
         }
 
         function animate() {
             requestAnimationFrame(animate);
             world.step(1/60);
+            
             if(dice && physicsBody) {
                 dice.position.copy(physicsBody.position);
                 dice.quaternion.copy(physicsBody.quaternion);
+                
+                // Reset rolling state when dice comes to rest
+                if (isOnGround() && isRolling) {
+                    isRolling = false;
+                }
             }
+            
             renderer.render(scene, camera);
         }
 
